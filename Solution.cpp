@@ -6,148 +6,390 @@
 #include <stack>
 #include <queue>
 #include <fstream>
+#include <string>
+#include <sstream>
 #include "Solution.h"
+#include "TemporyStorage.h"
 
-Solution::Solution(const HFS_Problem& problem)
-		:problem(problem)
+Solution::Solution(const HFS_Problem& problem, Solution_Init_Type init_type)
+	: problem(problem)
 {
-	jobSequence.resize(problem.getNumOfJobs());
-	std::iota(std::begin(jobSequence), std::end(jobSequence), 0);
-	std::shuffle(std::begin(jobSequence), std::end(jobSequence), rand_generator());
+	switch (init_type)
+	{
+	case RandomInit:
+		jobSequence.resize(problem.getNumOfJobs());
+		std::iota(std::begin(jobSequence), std::end(jobSequence), 0);
+		std::shuffle(std::begin(jobSequence), std::end(jobSequence), rand_generator());
+		break;
+	case Empty:
+		break;
+	}
+	initBaseGraph();
 }
 
 Solution::Solution(const HFS_Problem& problem, const std::vector<int>& sequence)
-		:problem(problem), jobSequence(sequence)
+	: problem(problem), jobSequence(sequence)
 {
-
+	initBaseGraph();
 }
 
-Solution::Solution(const HFS_Problem& problem, const std::string& fileName)
-		:problem(problem)
+Solution::Solution(const HFS_Problem& problem, const std::string& file_name)
+	: problem(problem)
 {
-	jobSequence.resize(problem.getNumOfJobs());
-	std::ifstream fin(fileName);
-	for (auto& job : jobSequence)
-	{
-		fin >> job;
-	}
-	fin.close();
-}
+	initBaseGraph();
 
+	int num_of_stages = problem.getNumOfStages();
+	int num_of_jobs = problem.getNumOfJobs();
 
-void Solution::decode()
-{
-	int jobCount = problem.getNumOfJobs();
-	int stageCount = problem.getNumOfStates();
-	const std::vector<Job>& jobs = problem.getJobs();
-
-	for (int jobId = 0; jobId < jobCount; ++jobId)
-	{
-		headJobs.emplace_back(new Node(jobId, -1, -1, 0));
-		tailJobs.emplace_back(new Node(jobId, -1, -1, 0));
-		headJobs[jobId]->sucByStage = tailJobs[jobId];
-		tailJobs[jobId]->preByStage = headJobs[jobId];
-	}
-
-	jobCountOnMachinesInEachStage.resize(stageCount);
-	headOnMachinesInEachStage.resize(stageCount);
-	tailOnMachinesInEachStage.resize(stageCount);
-	for (int s = 0; s < stageCount; ++s)
+	std::ifstream fin(file_name);
+	for (int s = 0; s < num_of_stages; ++s)
 	{
 		int machineCount = problem.getNumOfMachinesInStage(s);
-		jobCountOnMachinesInEachStage[s].resize(machineCount, 0);
 		for (int m = 0; m < machineCount; ++m)
 		{
-			headOnMachinesInEachStage[s].emplace_back(new Node(-1, s, m, 0));
-			tailOnMachinesInEachStage[s].emplace_back(new Node(-1, s, m, 0));
-
-			headOnMachinesInEachStage[s][m]->sucByMachine = tailOnMachinesInEachStage[s][m];
-			tailOnMachinesInEachStage[s][m]->preByMachine = headOnMachinesInEachStage[s][m];
-
+			f_head_on_machines_in_each_stage[s][m]->f_startTime = 0;
+			b_head_on_machines_in_each_stage[s][m]->b_startTime = 0;
 		}
 	}
 
-	std::vector<Node*> preOperationsByStage = headJobs;
-	std::vector<Node*> preOperationsByMachine;
-
-	makeSpan = INT32_MIN;
-	auto assignJobOnStatge = [&](int jobId, int statgeId)
+	int v;
+	for (int s = 0; s < num_of_stages; ++s)
 	{
-		Node* preOperByStage = preOperationsByStage[jobId];
-		Node* preOperByMachine = *std::min_element(std::begin(preOperationsByMachine),
-				std::end(preOperationsByMachine),
-				[](const auto& l, const auto& r)
-				{
-					return l->startTime + l->processTime < r->startTime + r->processTime;
-				});
-		int processTime = jobs[jobId].getProcessTime(statgeId);
-		int machineId = preOperByMachine->machineId;
+		fin >> v;
+		int machineCount = problem.getNumOfMachinesInStage(s);
+		for (int m = 0; m < machineCount; ++m)
+		{
+			fin >> v;
+			std::string str;
+			fin.get();
+			std::getline(fin, str);
+			std::istringstream ss(str);
+			Node* pre_node_at_machine = f_head_on_machines_in_each_stage[s][m];
+			while(ss >> v)
+			{
+				int job_id = v;
+				Node* operation = operations[s][job_id];
 
-		Node* curJobNode = new Node(jobId, statgeId, machineId, processTime);
+				pre_node_at_machine->sucByMachine = operation;
+				operation->sucByMachine = b_head_on_machines_in_each_stage[s][m];
 
-		curJobNode->preByMachine = preOperByMachine;
-		curJobNode->sucByMachine = tailOnMachinesInEachStage[statgeId][machineId];
-		preOperByMachine->sucByMachine = curJobNode;
-		tailOnMachinesInEachStage[statgeId][machineId]->preByMachine = curJobNode;
+				b_head_on_machines_in_each_stage[s][m]->preByMachine = operation;
+				operation->preByMachine = pre_node_at_machine;
 
-		curJobNode->preByStage = preOperByStage;
-		curJobNode->sucByStage = tailJobs[jobId];
-		preOperByStage->sucByStage = curJobNode;
-		tailJobs[jobId]->preByStage = curJobNode;
+				pre_node_at_machine = operation;
+			}
 
-		curJobNode->startTime = std::max(preOperByMachine->startTime + preOperByMachine->processTime,
-				preOperByStage->startTime + preOperByStage->processTime);
+		}
+	}
+	fin.close();
 
+}
 
-		tailOnMachinesInEachStage[statgeId][machineId]->startTime = curJobNode->startTime + processTime;
+Solution::Solution(const Solution& solution)
+	: problem(solution.problem), jobSequence(solution.jobSequence)//, makeSpan(solution.makeSpan)
+{
+	initBaseGraph();
+	int num_of_stages = problem.getNumOfStages();
+	int num_of_jobs = problem.getNumOfJobs();
+	for (int s = 0; s < num_of_stages; ++s)
+	{
+		int machineCount = problem.getNumOfMachinesInStage(s);
+		for (int m = 0; m < machineCount; ++m)
+		{
+			f_head_on_machines_in_each_stage[s][m]->f_startTime = solution.f_head_on_machines_in_each_stage[s][m]->f_startTime;
+			f_head_on_machines_in_each_stage[s][m]->b_startTime = solution.f_head_on_machines_in_each_stage[s][m]->b_startTime;
+			b_head_on_machines_in_each_stage[s][m]->f_startTime = solution.b_head_on_machines_in_each_stage[s][m]->f_startTime;
+			b_head_on_machines_in_each_stage[s][m]->b_startTime = solution.b_head_on_machines_in_each_stage[s][m]->b_startTime;
+		}
+	}
 
-		curJobNode->machineIndex = jobCountOnMachinesInEachStage[statgeId][machineId];
-		++jobCountOnMachinesInEachStage[statgeId][machineId];
-		tailOnMachinesInEachStage[statgeId][machineId]->machineIndex = jobCountOnMachinesInEachStage[statgeId][machineId];
+	for (int s = 0; s < num_of_stages; ++s)
+	{
+		int machineCount = problem.getNumOfMachinesInStage(s);
+		for (int m = 0; m < machineCount; ++m)
+		{
+			Node* f_head_node_at_machine = solution.f_head_on_machines_in_each_stage[s][m];
+			Node* node_at_machine = f_head_node_at_machine->sucByMachine;
 
-		makeSpan = std::max(makeSpan, tailOnMachinesInEachStage[statgeId][machineId]->startTime);
-		preOperationsByMachine[machineId] = curJobNode;
-		preOperationsByStage[jobId] = curJobNode;
+			Node* pre_node_at_machine = f_head_on_machines_in_each_stage[s][m];
+			while (node_at_machine->jobId != -1)
+			{
+				int job_id = node_at_machine->jobId;
+				Node* operation = operations[s][job_id];
+				operation->f_startTime = node_at_machine->f_startTime;
+				operation->b_startTime = node_at_machine->b_startTime;
+				operation->machineId = node_at_machine->machineId;
+
+				pre_node_at_machine->sucByMachine = operation;
+				operation->sucByMachine = b_head_on_machines_in_each_stage[s][m];
+
+				b_head_on_machines_in_each_stage[s][m]->preByMachine = operation;
+				operation->preByMachine = pre_node_at_machine;
+
+				pre_node_at_machine = operation;
+				node_at_machine = node_at_machine->sucByMachine;
+			}
+		}
+	}
+}
+
+Solution& Solution::operator=(const Solution& solution)
+{
+	if (this == &solution)
+	{
+		return *this;
+	}
+
+	jobSequence = solution.jobSequence;
+
+	int num_of_stages = problem.getNumOfStages();
+	int num_of_jobs = problem.getNumOfJobs();
+
+	for (int s = 0; s < num_of_stages; ++s)
+	{
+		int machineCount = problem.getNumOfMachinesInStage(s);
+		for (int m = 0; m < machineCount; ++m)
+		{
+			f_head_on_machines_in_each_stage[s][m]->f_startTime = solution.f_head_on_machines_in_each_stage[s][m]->f_startTime;
+			f_head_on_machines_in_each_stage[s][m]->b_startTime = solution.f_head_on_machines_in_each_stage[s][m]->b_startTime;
+			b_head_on_machines_in_each_stage[s][m]->f_startTime = solution.b_head_on_machines_in_each_stage[s][m]->f_startTime;
+			b_head_on_machines_in_each_stage[s][m]->b_startTime = solution.b_head_on_machines_in_each_stage[s][m]->b_startTime;
+		}
+	}
+
+	for (int s = 0; s < num_of_stages; ++s)
+	{
+		int machineCount = problem.getNumOfMachinesInStage(s);
+		for (int m = 0; m < machineCount; ++m)
+		{
+			Node* f_head_node_at_machine = solution.f_head_on_machines_in_each_stage[s][m];
+			Node* node_at_machine = f_head_node_at_machine->sucByMachine;
+			if (node_at_machine->jobId == -1)
+			{
+				f_head_on_machines_in_each_stage[s][m]->sucByMachine = b_head_on_machines_in_each_stage[s][m];
+				b_head_on_machines_in_each_stage[s][m]->preByMachine = f_head_on_machines_in_each_stage[s][m];
+				continue;
+			}
+			Node* pre_node_at_machine = f_head_on_machines_in_each_stage[s][m];
+			while (node_at_machine->jobId != -1)
+			{
+				int job_id = node_at_machine->jobId;
+				Node* operation = operations[s][job_id];
+				operation->f_startTime = node_at_machine->f_startTime;
+				operation->b_startTime = node_at_machine->b_startTime;
+				operation->machineId = node_at_machine->machineId;
+
+				pre_node_at_machine->sucByMachine = operation;
+				operation->sucByMachine = b_head_on_machines_in_each_stage[s][m];
+
+				b_head_on_machines_in_each_stage[s][m]->preByMachine = operation;
+				operation->preByMachine = pre_node_at_machine;
+
+				pre_node_at_machine = operation;
+				node_at_machine = node_at_machine->sucByMachine;
+			}
+		}
+	}
+
+	return *this;
+}
+
+Solution::~Solution()
+{
+	//deleteGraph();
+
+	for (const auto& operations_st_stage : operations)
+	{
+		for (auto op : operations_st_stage)
+		{
+			delete op;
+		}
+	}
+
+	int num_of_stages = problem.getNumOfStages();
+	for (int s = 0; s < num_of_stages; ++s)
+	{
+		int machineCount = problem.getNumOfMachinesInStage(s);
+		for (int m = 0; m < machineCount; ++m)
+		{
+			delete f_head_on_machines_in_each_stage[s][m];
+			delete b_head_on_machines_in_each_stage[s][m];
+		}
+	}
+
+	std::for_each(std::begin(f_headJobs), std::end(f_headJobs), [](const Node* ptr)
+	{
+		delete ptr;
+	});
+	std::for_each(std::begin(b_headJobs), std::end(b_headJobs), [](const Node* ptr)
+	{
+		delete ptr;
+	});
+}
+
+void Solution::initBaseGraph()
+{
+	int num_of_jobs = problem.getNumOfJobs();
+	int num_of_stages = problem.getNumOfStages();
+	const std::vector<Job>& jobs = problem.getJobs();
+
+	operations.resize(num_of_stages);
+	for (int s = 0; s < num_of_stages; ++s)
+	{
+		for (const auto& job : jobs)
+		{
+			operations[s].emplace_back(new Node(job.getId(), s, -1, job.getProcessTime(s)));
+		}
+	}
+
+	for (int jobId = 0; jobId < num_of_jobs; ++jobId)
+	{
+		f_headJobs.emplace_back(new Node(jobId, -1, -1, 0));
+		b_headJobs.emplace_back(new Node(jobId, -1, -1, 0));
+		f_headJobs[jobId]->sucByStage = b_headJobs[jobId];
+		b_headJobs[jobId]->preByStage = f_headJobs[jobId];
+	}
+
+	for (int s = 0; s < num_of_stages; ++s)
+	{
+		for (int jobId = 0; jobId < num_of_jobs; ++jobId)
+		{
+			operations[s][jobId]->sucByStage = b_headJobs[jobId];
+			operations[s][jobId]->preByStage = b_headJobs[jobId]->preByStage;
+			b_headJobs[jobId]->preByStage->sucByStage = operations[s][jobId];
+			b_headJobs[jobId]->preByStage = operations[s][jobId];
+		}
+	}
+
+	f_head_on_machines_in_each_stage.resize(num_of_stages);
+	b_head_on_machines_in_each_stage.resize(num_of_stages);
+	for (int s = 0; s < num_of_stages; ++s)
+	{
+		int machineCount = problem.getNumOfMachinesInStage(s);
+		for (int m = 0; m < machineCount; ++m)
+		{
+			f_head_on_machines_in_each_stage[s].emplace_back(new Node(-1, s, m, 0));
+			b_head_on_machines_in_each_stage[s].emplace_back(new Node(-1, s, m, 0));
+
+			f_head_on_machines_in_each_stage[s][m]->sucByMachine = b_head_on_machines_in_each_stage[s][m];
+			b_head_on_machines_in_each_stage[s][m]->preByMachine = f_head_on_machines_in_each_stage[s][m];
+		}
+	}
+}
+
+void Solution::reset_to_base_graph()
+{
+	int num_of_jobs = problem.getNumOfJobs();
+	int num_of_stages = problem.getNumOfStages();
+
+	/*for (int jobId = 0; jobId < num_of_jobs; ++jobId)
+	{
+		f_headJobs[jobId]->sucByStage = b_headJobs[jobId];
+		b_headJobs[jobId]->preByStage = f_headJobs[jobId];
+	}*/
+
+	for (int s = 0; s < num_of_stages; ++s)
+	{
+		int machineCount = problem.getNumOfMachinesInStage(s);
+		for (int m = 0; m < machineCount; ++m)
+		{
+			f_head_on_machines_in_each_stage[s][m]->sucByMachine = b_head_on_machines_in_each_stage[s][m];
+			b_head_on_machines_in_each_stage[s][m]->preByMachine = f_head_on_machines_in_each_stage[s][m];
+		}
+	}
+}
+
+int Solution::decode_forward()
+{
+	int num_of_stages = problem.getNumOfStages();
+
+	TS::zero_storage();
+
+	//first stage
+	for (auto job_id : jobSequence)
+	{
+		int mt = min_element(TS::m_idle_time[0].begin(), TS::m_idle_time[0].end()) - TS::m_idle_time[0].begin();
+		TS::c_time[job_id][0] = TS::m_idle_time[0][mt] + operations[0][job_id]->processTime;
+		TS::m_idle_time[0][mt] = TS::c_time[job_id][0];
+	}
+
+	TS::sequence_of_other_stage = jobSequence;
+	//other stage. FIFO and FAM
+	for (int s = 1; s < num_of_stages; ++s)
+	{
+		std::sort(TS::sequence_of_other_stage.begin(), TS::sequence_of_other_stage.end(), [&](int job1, int job2)
+		{
+			return TS::c_time[job1][s - 1] < TS::c_time[job2][s - 1];
+		});
+		for (int first_come_job_id : TS::sequence_of_other_stage)
+		{
+			int mt = min_element(TS::m_idle_time[s].begin(), TS::m_idle_time[s].end()) - TS::m_idle_time[s].begin();
+			TS::c_time[first_come_job_id][s] =
+				std::max(TS::m_idle_time[s][mt], TS::c_time[first_come_job_id][s - 1])
+				+ operations[s][first_come_job_id]->processTime;
+			TS::m_idle_time[s][mt] = TS::c_time[first_come_job_id][s];
+		}
+	}
+	return *std::max_element(TS::m_idle_time[num_of_stages - 1].begin(), TS::m_idle_time[num_of_stages - 1].end());
+}
+
+int Solution::decode_forward_to_graph()
+{
+	reset_to_base_graph();
+	int num_of_stages = problem.getNumOfStages();
+
+	auto assign_job_fun = [&](Node* cur_operation_node, int job_id, int stage_id, int machine_id)
+	{
+		cur_operation_node->machineId = machine_id;
+
+		cur_operation_node->preByMachine = b_head_on_machines_in_each_stage[stage_id][machine_id]->preByMachine;
+		cur_operation_node->sucByMachine = b_head_on_machines_in_each_stage[stage_id][machine_id];
+
+		b_head_on_machines_in_each_stage[stage_id][machine_id]->preByMachine->sucByMachine = cur_operation_node;
+		b_head_on_machines_in_each_stage[stage_id][machine_id]->preByMachine = cur_operation_node;
+
+		b_head_on_machines_in_each_stage[stage_id][machine_id]->f_startTime =
+			cur_operation_node->f_startTime + cur_operation_node->processTime;
 	};
 
-	//第一阶段，按照jobSequence安排工件
-	preOperationsByMachine = headOnMachinesInEachStage[0];
-	for (auto j : jobSequence)
+	TS::zero_storage();
+	//first stage
+	for (auto job_id : jobSequence)
 	{
-		assignJobOnStatge(jobs[j].getId(), 0);
+		Node* cur_operation_node = operations[0][job_id];
+
+		int mt = min_element(TS::m_idle_time[0].begin(), TS::m_idle_time[0].end()) - TS::m_idle_time[0].begin();
+		cur_operation_node->f_startTime = TS::m_idle_time[0][mt];
+		TS::c_time[job_id][0] = cur_operation_node->f_startTime + cur_operation_node->processTime;
+		TS::m_idle_time[0][mt] = TS::c_time[job_id][0];
+
+		assign_job_fun(cur_operation_node, job_id, 0, mt);
 	}
 
-	//其他阶段，按照first-come-first-served安排工件
-	for (int s = 1; s < stageCount; ++s)
+	TS::sequence_of_other_stage = jobSequence;
+	//other stage. FIFO and FAM
+	for (int s = 1; s < num_of_stages; ++s)
 	{
-		preOperationsByMachine = headOnMachinesInEachStage[s];
-		std::vector<Node*> firstComeFirstServed = headOnMachinesInEachStage[s - 1];
-		for (auto& node : firstComeFirstServed)
+		std::sort(TS::sequence_of_other_stage.begin(), TS::sequence_of_other_stage.end(), [&](int job1, int job2)
 		{
-			node = node->sucByMachine;
-		}
-		while (true)
+			return TS::c_time[job1][s - 1] < TS::c_time[job2][s - 1];
+		});
+		for (int first_come_job_id : TS::sequence_of_other_stage)
 		{
-			Node* firstComeJob = *std::min_element(std::begin(firstComeFirstServed), end(firstComeFirstServed),
-					[](const auto& l, const auto& r)
-					{
-						int ctime1 = l->jobId == -1 ? INT32_MAX : l->startTime +
-								l->processTime;
-						int ctime2 = r->jobId == -1 ? INT32_MAX : r->startTime +
-								r->processTime;
-						return ctime1 < ctime2;
-					});
-			if (firstComeJob->jobId == -1)
-			{
-				break;
-			}
-			assignJobOnStatge(firstComeJob->jobId, s);
-			firstComeFirstServed[firstComeJob->machineId] = firstComeJob->sucByMachine;
+			Node* cur_operation_node = operations[s][first_come_job_id];
+
+			int mt = min_element(TS::m_idle_time[s].begin(), TS::m_idle_time[s].end()) - TS::m_idle_time[s].begin();
+			cur_operation_node->f_startTime = std::max(TS::m_idle_time[s][mt], TS::c_time[first_come_job_id][s - 1]);
+
+			TS::c_time[first_come_job_id][s] = cur_operation_node->f_startTime + cur_operation_node->processTime;
+			TS::m_idle_time[s][mt] = TS::c_time[first_come_job_id][s];
+
+			assign_job_fun(cur_operation_node, first_come_job_id, s, mt);
 		}
 	}
 
 	//计算逆向时间
-	for (auto sit = std::rbegin(tailOnMachinesInEachStage); sit != std::rend(tailOnMachinesInEachStage); ++sit)
+	for (auto sit = std::rbegin(b_head_on_machines_in_each_stage); sit != std::rend(b_head_on_machines_in_each_stage); ++sit)
 	{
 		const std::vector<Node*>& tailOnMachines = *sit;
 		for (auto mit = std::rbegin(tailOnMachines); mit != std::rend(tailOnMachines); ++mit)
@@ -155,268 +397,115 @@ void Solution::decode()
 			Node* node = (*mit)->preByMachine;
 			while (node->jobId != -1)
 			{
-				node->tailTime = std::max(node->sucByMachine->tailTime + node->sucByMachine->processTime,
-						node->sucByStage->tailTime + node->sucByStage->processTime);
+				node->b_startTime = std::max(node->sucByMachine->b_startTime + node->sucByMachine->processTime,
+					node->sucByStage->b_startTime + node->sucByStage->processTime);
 				node = node->preByMachine;
 			}
-			node->tailTime = node->sucByMachine->tailTime + node->sucByMachine->processTime;
+			node->b_startTime = node->sucByMachine->b_startTime + node->sucByMachine->processTime;
 		}
 	}
+
+	return *std::max_element(TS::m_idle_time[num_of_stages - 1].begin(), TS::m_idle_time[num_of_stages - 1].end());
 }
 
-
-void Solution::reCalculateMakeSpan()
+int Solution::refresh_all_graph()
 {
-	int lastStageId = problem.getNumOfStates() - 1;
-	makeSpan = (*std::max_element(std::begin(tailOnMachinesInEachStage[lastStageId]),
-			std::end(tailOnMachinesInEachStage[lastStageId]), [](const Node* l, const Node* r)
-			{
-				return l->startTime < r->startTime;
-			}))->startTime;
-}
-
-void Solution::print() const
-{
-	int stageId = 0;
-	for (const auto& headOnMachines : headOnMachinesInEachStage)
+	//Recalculate forward complete time
+	for (const auto& headOnMachines : f_head_on_machines_in_each_stage)
 	{
-		std::cout << stageId << std::endl;
-		int machineId = 0;
-		for (const auto& head : headOnMachines)
+		for (auto headOnMachine : headOnMachines)
 		{
-			std::cout << "\t" << machineId << ":\t";
-			Node* node = head->sucByMachine;
+			Node* node = headOnMachine->sucByMachine;
 			while (node->jobId != -1)
 			{
-				std::cout << "(" << node->jobId;
-				std::cout << "," << node->startTime;
-				std::cout << "," << node->processTime << ")";
+				node->f_startTime = std::max(node->preByMachine->f_startTime + node->preByMachine->processTime,
+					node->preByStage->f_startTime + node->preByStage->processTime);
+
+				//node->is_visit = false;
+				//node->dfn = 0;
+				//node->low = 0;
+				//node->critical_adjacent_count = 0;
+
 				node = node->sucByMachine;
 			}
-			++machineId;
-			std::cout << std::endl;
+			node->f_startTime = node->preByMachine->f_startTime + node->preByMachine->processTime;
 		}
-		++stageId;
 	}
 
-	int jobId = 0;
-	for (const auto& head : headJobs)
+	//Recalculate backward complete time
+	for (auto sit = std::rbegin(b_head_on_machines_in_each_stage); sit != std::rend(b_head_on_machines_in_each_stage); ++sit)
 	{
-		std::cout << jobId;
-		std::cout << "\t";
-		Node* node = head->sucByStage;
-		while (node->stageId != -1)
+		const std::vector<Node*>& tailOnMachines = *sit;
+		for (auto mit = std::rbegin(tailOnMachines); mit != std::rend(tailOnMachines); ++mit)
 		{
-			std::cout << "(" << node->stageId;
-			std::cout << "," << node->machineId;
-			std::cout << "," << node->startTime;
-			std::cout << "," << node->processTime << ")";
-			node = node->sucByStage;
+			Node* node = (*mit)->preByMachine;
+			while (node->jobId != -1)
+			{
+				node->b_startTime = std::max(node->sucByMachine->b_startTime + node->sucByMachine->processTime,
+					node->sucByStage->b_startTime + node->sucByStage->processTime);
+				node = node->preByMachine;
+			}
+			node->b_startTime = node->sucByMachine->b_startTime + node->sucByMachine->processTime;
 		}
-		std::cout << std::endl;
-		++jobId;
 	}
+
+	int lastStageId = problem.getNumOfStages() - 1;
+	int span = (*std::max_element(std::begin(b_head_on_machines_in_each_stage[lastStageId]),
+		std::end(b_head_on_machines_in_each_stage[lastStageId]), [](const Node* n1, const Node* n2)
+		{
+			return n1->f_startTime < n2->f_startTime;
+		}))->f_startTime;
+	return span;
 }
 
-void Solution::findOneCriticalPathMachineFirst(std::vector<Node*>& criticalPath) const
+int Solution::refresh_forward_graph()
 {
-	criticalPath.clear();
-	int stageCount = problem.getNumOfStates();
-	Node* critical_node = *std::max_element(std::begin(tailOnMachinesInEachStage[stageCount - 1]),
-			std::end(tailOnMachinesInEachStage[stageCount - 1]),
-			[](const Node* l, const Node* r)
-			{
-				return l->startTime < r->startTime;
-			});
-	critical_node = critical_node->preByMachine;
-	while (critical_node->jobId != -1)
+	//Recalculate forward complete time
+	for (const auto& headOnMachines : f_head_on_machines_in_each_stage)
 	{
-		criticalPath.emplace_back(critical_node);
-		if (critical_node->preByMachine->startTime + critical_node->preByMachine->processTime ==
-				critical_node->startTime)
+		for (auto headOnMachine : headOnMachines)
 		{
-			critical_node = critical_node->preByMachine;
-		}
-		else
-		{
-			critical_node = critical_node->preByStage;
-		}
-	}
-}
-
-void Solution::findOneCriticalPathJobFirst(std::vector<Node*>& criticalPath) const
-{
-    criticalPath.clear();
-    int stageCount = problem.getNumOfStates();
-    Node* critical_node = *std::max_element(std::begin(tailOnMachinesInEachStage[stageCount - 1]),
-                                            std::end(tailOnMachinesInEachStage[stageCount - 1]),
-                                            [](const Node* l, const Node* r)
-                                            {
-                                                return l->startTime < r->startTime;
-                                            });
-    critical_node = critical_node->preByMachine;
-    while (critical_node->jobId != -1)
-    {
-        criticalPath.emplace_back(critical_node);
-        if (critical_node->preByStage->stageId != -1 && critical_node->preByStage->startTime + critical_node->preByStage->processTime ==
-            critical_node->startTime)
-        {
-            critical_node = critical_node->preByStage;
-        }
-        else
-        {
-            critical_node = critical_node->preByMachine;
-        }
-    }
-}
-
-void Solution::findCutNodes(std::vector<Node*>& cutNodes) const
-{
-	int stageCount = problem.getNumOfStates();
-
-	Node start(INT32_MIN, INT32_MIN, INT32_MIN, INT32_MIN);
-	Node end(INT32_MAX, INT32_MAX, INT32_MAX, INT32_MAX);
-
-	std::unordered_map<Node*, std::list<Node*>> childNodes;
-
-	std::stack<std::tuple<Node*, Node*, int>> nodeStack;
-	nodeStack.emplace(&start, nullptr, 0);
-	std::unordered_map<Node*, int> dfn, low;
-	int timeStamp = 1;
-
-	while (!nodeStack.empty())
-	{
-		std::tuple<Node*, Node*, int>& curTuple = nodeStack.top();
-		Node* curNode = std::get<0>(curTuple);
-		Node* parentNode = std::get<1>(curTuple);
-		if(dfn[curNode] == 0)
-		{
-			dfn[curNode] = low[curNode] = timeStamp;
-			++timeStamp;
-			if (curNode == &start)
+			Node* node = headOnMachine->sucByMachine;
+			while (node->jobId != -1)
 			{
-				for (Node* node : tailOnMachinesInEachStage[stageCount - 1])
-				{
-					if (node->startTime == makeSpan)
-					{
-						childNodes[curNode].emplace_back(node->preByMachine);
-					}
-				}
+				node->f_startTime = std::max(node->preByMachine->f_startTime + node->preByMachine->processTime,
+					node->preByStage->f_startTime + node->preByStage->processTime);
+				node = node->sucByMachine;
 			}
-			else if (curNode == &end)
-			{
-				for (Node* node : headOnMachinesInEachStage[0])
-				{
-					if (node->tailTime == makeSpan)
-					{
-						childNodes[curNode].emplace_back(node->sucByMachine);
-					}
-				}
-			}
-			else
-			{
-				if (curNode->preByMachine->jobId != -1)
-				{
-					if (curNode->preByMachine->startTime + curNode->preByMachine->processTime ==
-							curNode->startTime)
-					{
-						childNodes[curNode].emplace_back(curNode->preByMachine);
-					};
-				}
-				if (curNode->preByStage->stageId != -1)
-				{
-					if (curNode->preByStage->startTime + curNode->preByStage->processTime ==
-							curNode->startTime)
-					{
-						childNodes[curNode].emplace_back(curNode->preByStage);
-					}
-				}
-				if (curNode->sucByMachine->jobId != -1)
-				{
-					if (curNode->sucByMachine->tailTime + curNode->sucByMachine->processTime ==
-							curNode->tailTime)
-					{
-						childNodes[curNode].emplace_back(curNode->sucByMachine);
-					};
-				}
-				if (curNode->sucByStage->stageId != -1)
-				{
-					if (curNode->sucByStage->tailTime + curNode->sucByStage->processTime ==
-							curNode->tailTime)
-					{
-						childNodes[curNode].emplace_back(curNode->sucByStage);
-					}
-				}
-				if (curNode->preByMachine->stageId == 0 && curNode->preByMachine->jobId == -1)
-				{
-					childNodes[curNode].emplace_back(&end);
-				}
-				if (curNode->sucByMachine->stageId == stageCount - 1 && curNode->sucByMachine->jobId == -1)
-				{
-					childNodes[curNode].emplace_back(&start);
-				}
-			}
-		}
-
-		bool flag = false;
-
-		auto it = std::begin(childNodes[curNode]);
-		while(it != std::end(childNodes[curNode]))
-		{
-			Node* childNode = *it;
-			childNodes[curNode].erase(it++);
-			if (childNode == parentNode)
-			{
-				continue;
-			}
-			if (dfn[childNode] == 0)
-			{
-				++std::get<2>(curTuple);
-				nodeStack.emplace(childNode, curNode, 0);
-				flag = true;
-				break;
-			}
-			else
-			{
-				low[curNode] = std::min(low[curNode], dfn[childNode]);
-			}
-		}
-
-		if (!flag)
-		{
-			std::tuple<Node*, Node*, int> tp = nodeStack.top();
-			nodeStack.pop();
-			Node* node = std::get<0>(tp);
-			Node* pNode = std::get<1>(tp);
-			if(nodeStack.empty())
-			{
-				if(std::get<2>(tp) > 1)
-				{
-					cutNodes.emplace_back(node);
-				}
-			}
-			else
-			{
-				if (dfn[pNode] <= low[node] && pNode != &start)
-				{
-					cutNodes.emplace_back(pNode);
-				}
-				low[pNode] = std::min(low[std::get<0>(tp)], low[pNode]);
-			}
+			node->f_startTime = node->preByMachine->f_startTime + node->preByMachine->processTime;
 		}
 	}
+
+	int lastStageId = problem.getNumOfStages() - 1;
+	int span = (*std::max_element(std::begin(b_head_on_machines_in_each_stage[lastStageId]),
+		std::end(b_head_on_machines_in_each_stage[lastStageId]), [](const Node* n1, const Node* n2)
+		{
+			return n1->f_startTime < n2->f_startTime;
+		}))->f_startTime;
+	return span;
 }
 
-void Solution::findAllCriticalNodes(std::vector<Node*>& criticalNodes) const
+void Solution::find_mandatory_nodes(std::vector<Node*>& mandatory_nodes, int span) const
 {
+	int num_of_stages = problem.getNumOfStages();
+
+	std::vector<Node*> critical_nodes;
 	std::queue<Node*> nodesQueue;
 
-	int stageCount = problem.getNumOfStates();
+	Node critical_graph_start_node(INT32_MIN, INT32_MIN, INT32_MIN, INT32_MIN);
+	Node critical_graph_end_node(INT32_MAX, INT32_MAX, INT32_MAX, INT32_MAX);
 
-	for (Node* node : tailOnMachinesInEachStage[stageCount - 1])
+	for (Node* b_head : b_head_on_machines_in_each_stage[num_of_stages - 1])
 	{
-		if (node->startTime == makeSpan)
+		Node* node = b_head->preByMachine;
+		if (node->jobId != -1 && node->f_startTime + node->processTime == span)
 		{
+			critical_graph_start_node.critical_adjacent[critical_graph_start_node.critical_adjacent_count] = node;
+			++critical_graph_start_node.critical_adjacent_count;
+			node->critical_adjacent[node->critical_adjacent_count] = &critical_graph_start_node;
+			++node->critical_adjacent_count;
+			node->is_visit = true;
+			critical_nodes.emplace_back(node);
 			nodesQueue.push(node);
 		}
 	}
@@ -425,183 +514,951 @@ void Solution::findAllCriticalNodes(std::vector<Node*>& criticalNodes) const
 	{
 		Node* node = nodesQueue.front();
 		nodesQueue.pop();
-
-		if (node->preByMachine->jobId != -1)
+		Node* pre_node_on_machine = node->preByMachine;
+		if (pre_node_on_machine->jobId != -1
+			&& pre_node_on_machine->f_startTime + pre_node_on_machine->processTime == node->f_startTime)
 		{
-			if (node->preByMachine->startTime + node->preByMachine->processTime ==
-					node->startTime)
+			node->critical_adjacent[node->critical_adjacent_count] = pre_node_on_machine;
+			++node->critical_adjacent_count;
+			pre_node_on_machine->critical_adjacent[pre_node_on_machine->critical_adjacent_count] = node;
+			++pre_node_on_machine->critical_adjacent_count;
+			if (!pre_node_on_machine->is_visit)
 			{
-				criticalNodes.emplace_back(node->preByMachine);
-				nodesQueue.push(node->preByMachine);
-			};
+				pre_node_on_machine->is_visit = true;
+				critical_nodes.emplace_back(pre_node_on_machine);
+				nodesQueue.push(pre_node_on_machine);
+			}
 		}
-		if (node->preByStage != nullptr && node->preByStage->stageId != -1)
+
+		Node* pre_node_at_stage = node->preByStage;
+		if (pre_node_at_stage->stageId != -1
+			&& pre_node_at_stage->f_startTime + pre_node_at_stage->processTime == node->f_startTime)
 		{
-			if (node->preByStage->startTime + node->preByStage->processTime ==
-					node->startTime)
+			node->critical_adjacent[node->critical_adjacent_count] = pre_node_at_stage;
+			++node->critical_adjacent_count;
+			pre_node_at_stage->critical_adjacent[pre_node_at_stage->critical_adjacent_count] = node;
+			++pre_node_at_stage->critical_adjacent_count;
+			if (!pre_node_at_stage->is_visit)
 			{
-				criticalNodes.emplace_back(node->preByStage);
-				nodesQueue.push(node->preByStage);
+				pre_node_at_stage->is_visit = true;
+				critical_nodes.emplace_back(pre_node_at_stage);
+				nodesQueue.push(pre_node_at_stage);
 			}
 		}
 	}
-}
 
-//广度优先
-void Solution::refreshStartTimeFromNode(Node* beginNode)
-{
-	int maxStartTime = INT32_MIN;
-	std::queue<Node*> updateNodes;
-	updateNodes.push(beginNode);
-	while (!updateNodes.empty())
+	for (Node* f_head : f_head_on_machines_in_each_stage[0])
 	{
-		Node* node = updateNodes.front();
-		updateNodes.pop();
-		if (node->jobId != -1 && node->stageId != -1)
+		Node* node = f_head->sucByMachine;
+		if (node->jobId != -1 && node->b_startTime + node->processTime == span)
 		{
-			node->startTime = std::max(node->preByMachine->startTime + node->preByMachine->processTime,
-					node->preByStage->startTime + node->preByStage->processTime);
-
-		}
-		else if (node->jobId == -1)
-		{
-			node->startTime = node->preByMachine->startTime + node->preByMachine->processTime;
-		}
-
-		if (node->sucByMachine != nullptr)
-		{
-			updateNodes.push(node->sucByMachine);
-		}
-
-		if (node->sucByStage != nullptr)
-		{
-			updateNodes.push(node->sucByStage);
+			critical_graph_end_node.critical_adjacent[critical_graph_end_node.critical_adjacent_count] = node;
+			++critical_graph_end_node.critical_adjacent_count;
+			node->critical_adjacent[node->critical_adjacent_count] = &critical_graph_end_node;
+			++node->critical_adjacent_count;
 		}
 	}
-}
 
-//广度优先
-void Solution::refreshTailTimeFromNode(Node* beginNode)
-{
-	std::queue<Node*> updateNodes;
-	updateNodes.push(beginNode);
-	while (!updateNodes.empty())
+	std::stack<std::pair<Node*, Node*>> nodeStack;
+	nodeStack.emplace(&critical_graph_start_node, nullptr);
+	int timeStamp = 1;
+
+	while (!nodeStack.empty())
 	{
-		Node* node = updateNodes.front();
-		updateNodes.pop();
-		if (node->jobId != -1 && node->stageId != -1)
+		std::pair<Node*, Node*>& cur_pair = nodeStack.top();
+		Node* curNode = cur_pair.first;
+		Node* parentNode = cur_pair.second;
+		if (curNode->dfn == 0)
 		{
-			node->tailTime = std::max(node->sucByMachine->tailTime + node->sucByMachine->processTime,
-					node->sucByStage->tailTime + node->sucByStage->processTime);
-
-		}
-		else if (node->jobId == -1)
-		{
-			node->tailTime = node->sucByMachine->tailTime + node->sucByMachine->processTime;
+			curNode->dfn = curNode->low = timeStamp;
+			++timeStamp;
 		}
 
-		if (node->preByMachine != nullptr)
+		bool flag = false;
+
+		while (true)
 		{
-			updateNodes.push(node->preByMachine);
-		}
-
-		if (node->preByStage != nullptr)
-		{
-			updateNodes.push(node->preByStage);
-		}
-	}
-}
-
-void Solution::refreshStatTailTimeForNode(Node* node)
-{
-	node->startTime = std::max(node->preByMachine->startTime + node->preByMachine->processTime,
-			node->preByStage->startTime + node->preByStage->processTime);
-	node->tailTime = std::max(node->sucByMachine->tailTime + node->sucByMachine->processTime,
-			node->sucByStage->tailTime + node->sucByStage->processTime);
-}
-
-int Solution::deleteNodeWithRefresh(Node* node)
-{
-	//同一机器断开
-	node->preByMachine->sucByMachine = node->sucByMachine;
-	node->sucByMachine->preByMachine = node->preByMachine;
-
-	//机器相关
-	refreshStartTimeFromNode(node->sucByMachine);
-	refreshTailTimeFromNode(node->preByMachine);
-
-	//工件相关
-	int oldProcessTime = node->processTime;
-	node->processTime = 0;
-
-	node->startTime = node->preByStage->startTime + node->preByStage->processTime;
-	refreshStartTimeFromNode(node->sucByStage);
-	node->tailTime = node->sucByStage->tailTime + node->sucByStage->processTime;
-	refreshTailTimeFromNode(node->preByStage);
-
-	//恢复删除节点的处理时间
-	node->processTime = oldProcessTime;
-
-	--jobCountOnMachinesInEachStage[node->stageId][node->machineId];
-	//计算移除后makeSpan，关键路径的第一个和最后一个工序移除不会变好，只需要遍历最后一个阶段。
-	int lastStageId = problem.getNumOfStates() - 1;
-	return (*std::max_element(std::begin(tailOnMachinesInEachStage[lastStageId]),
-			std::end(tailOnMachinesInEachStage[lastStageId]), [](const Node* l, const Node* r)
+			if (curNode->critical_adjacent_count == 0)
 			{
-				return l->startTime < r->startTime;
-			}))->startTime;
-}
+				break;
+			}
+			Node* childNode = curNode->critical_adjacent[curNode->critical_adjacent_count - 1];;
+			--curNode->critical_adjacent_count;
+			if (childNode == parentNode)
+			{
+				continue;
+			}
+			if (childNode->dfn == 0)
+			{
+				nodeStack.emplace(childNode, curNode);
+				flag = true;
+				break;
+			}
+			else
+			{
+				curNode->low = std::min(curNode->low, childNode->dfn);
+			}
+		}
 
-void Solution::deleteNodeWithoutRefresh(Node* node)
-{
-	//同一机器断开
-	node->preByMachine->sucByMachine = node->sucByMachine;
-	node->sucByMachine->preByMachine = node->preByMachine;
+		if (!flag)
+		{
+			std::pair<Node*, Node*> tp = nodeStack.top();
+			nodeStack.pop();
+			Node* node = std::get<0>(tp);
+			Node* pNode = std::get<1>(tp);
+			if (!nodeStack.empty())
+			{
+				if (pNode->dfn <= node->low && pNode != &critical_graph_start_node)
+				{
+					mandatory_nodes.emplace_back(pNode);
+				}
+				pNode->low = std::min(node->low, pNode->low);
+			}
+		}
+	}
 
-	node->startTime = node->preByStage->startTime + node->preByStage->processTime;
-	node->tailTime = node->sucByStage->tailTime + node->sucByStage->processTime;
-
-	--jobCountOnMachinesInEachStage[node->stageId][node->machineId];
-}
-
-void Solution::moveNode(Node* deletedNode, Node* afterNode)
-{
-	deletedNode->sucByMachine = afterNode->sucByMachine;
-	deletedNode->preByMachine = afterNode;
-	deletedNode->sucByMachine->preByMachine = deletedNode;
-	afterNode->sucByMachine = deletedNode;
-
-	deletedNode->machineId = afterNode->machineId;
-
-	++jobCountOnMachinesInEachStage[afterNode->stageId][afterNode->machineId];
-}
-
-Solution::~Solution()
-{
-	for (const auto& headOnMachines : headOnMachinesInEachStage)
+	for (auto node_ptr : critical_nodes)
 	{
+		node_ptr->is_visit = false;
+		node_ptr->dfn = 0;
+		node_ptr->low = 0;
+		node_ptr->critical_adjacent_count = 0;
+	}
+}
+
+void Solution::find_all_critical_nodes_forward(std::vector<Node*>& critical_nodes, int span) const
+{
+	std::queue<Node*> nodesQueue;
+
+	for (Node* f_head : f_head_on_machines_in_each_stage[0])
+	{
+		Node* node = f_head->sucByMachine;
+		if (node->jobId != -1 && node->b_startTime + node->processTime == span)
+		{
+			node->is_visit = true;
+			critical_nodes.emplace_back(node);
+			nodesQueue.push(node);
+		}
+	}
+
+	while (!nodesQueue.empty())
+	{
+		Node* node = nodesQueue.front();
+		nodesQueue.pop();
+		Node* suc_node_on_machine = node->sucByMachine;
+		if (suc_node_on_machine->jobId != -1 && !suc_node_on_machine->is_visit
+			&& suc_node_on_machine->b_startTime + suc_node_on_machine->processTime == node->b_startTime)
+		{
+
+			suc_node_on_machine->is_visit = true;
+			critical_nodes.emplace_back(suc_node_on_machine);
+			nodesQueue.push(suc_node_on_machine);
+		}
+
+		Node* suc_node_at_stage = node->sucByStage;
+		if (suc_node_at_stage->stageId != -1 && !suc_node_at_stage->is_visit
+			&& suc_node_at_stage->b_startTime + suc_node_at_stage->processTime == node->b_startTime)
+		{
+			suc_node_at_stage->is_visit = true;
+			critical_nodes.emplace_back(suc_node_at_stage);
+			nodesQueue.push(suc_node_at_stage);
+		}
+	}
+
+	for (auto node_ptr : critical_nodes)
+	{
+		node_ptr->is_visit = false;
+	}
+}
+
+void Solution::delete_node_physical_from_graph(Node* deleted_node)
+{
+	//Disconnection on the same machine
+	deleted_node->preByMachine->sucByMachine = deleted_node->sucByMachine;
+	deleted_node->sucByMachine->preByMachine = deleted_node->preByMachine;
+
+	//Disconnection on front and back stages
+	deleted_node->preByStage->sucByStage = deleted_node->sucByStage;
+	deleted_node->sucByStage->preByStage = deleted_node->preByStage;
+}
+
+void Solution::insert_node_at_position(Node* deleted_node, Node* node_before_insert_pos, Node* node_in_pre_stage)
+{
+	node_before_insert_pos->sucByMachine->preByMachine = deleted_node;
+	deleted_node->sucByMachine = node_before_insert_pos->sucByMachine;
+
+	node_before_insert_pos->sucByMachine = deleted_node;
+	deleted_node->preByMachine = node_before_insert_pos;
+
+	node_in_pre_stage->sucByStage->preByStage = deleted_node;
+	deleted_node->sucByStage = node_in_pre_stage->sucByStage;
+
+	node_in_pre_stage->sucByStage = deleted_node;
+	deleted_node->preByStage = node_in_pre_stage;
+
+	deleted_node->machineId = node_before_insert_pos->machineId;
+}
+
+//The algorithm MOAIG in the paper
+int Solution::decode_local_search_mandatory_nodes(int original_makeSpan)
+{
+	std::vector<Node*> mandatory_nodes;
+
+	while (true)
+	{
+		mandatory_nodes.clear();
+		find_mandatory_nodes(mandatory_nodes, original_makeSpan);
+		int new_span = local_search_mandatory_nodes(mandatory_nodes, original_makeSpan);
+		if (new_span < original_makeSpan)
+		{
+			original_makeSpan = new_span;
+		}
+		else
+		{
+			break;
+		}
+	}
+	return original_makeSpan;
+}
+
+int Solution::local_search_mandatory_nodes(const std::vector<Node*>& mandatory_nodes, int original_makeSpan)
+{
+	int stage_count = problem.getNumOfStages();
+	for (auto deleteNode : mandatory_nodes)
+	{
+		Node* originalPreNodeOnMachine = deleteNode->preByMachine;
+
+		int current_stage_id = deleteNode->stageId;
+		delete_node_physical_from_graph(deleteNode);
+
+		int f_start_time_of_pre_stage =
+			deleteNode->preByStage->f_startTime + deleteNode->preByStage->processTime;
+
+		int b_start_time_of_suc_stage =
+			deleteNode->sucByStage->b_startTime + deleteNode->sucByStage->processTime;
+
+		const auto& heads = f_head_on_machines_in_each_stage[current_stage_id];
+		const auto& tails = b_head_on_machines_in_each_stage[current_stage_id];
+		int machineCount = problem.getNumOfMachinesInStage(current_stage_id);
+		int bestPathLengthThroughDelNode = original_makeSpan;
+		Node* nodeBeforeBestInsertPos;
+		for (int mid = 0; mid < machineCount; ++mid)
+		{
+			if (mid == deleteNode->machineId)//Try the original processing machine
+			{
+				int a_point_offset = INT16_MIN;
+				Node* nodeBeforeAPoint = heads[mid];
+				int f_start_time_of_node_before_A = INT32_MIN;
+				if (current_stage_id == 0)
+				{
+					if (deleteNode->preByMachine == heads[mid])
+					{
+						a_point_offset = 0;
+					}
+				}
+				else
+				{
+					a_point_offset = 0;
+					nodeBeforeAPoint = deleteNode->preByMachine;
+					if (nodeBeforeAPoint->f_startTime + nodeBeforeAPoint->processTime <= f_start_time_of_pre_stage)
+					{
+						//Find position A to the right from the deleted position
+						f_start_time_of_node_before_A = nodeBeforeAPoint->f_startTime;
+						Node* c_node = nodeBeforeAPoint->sucByMachine;
+						int f_star_time_c_node;
+						while (c_node->jobId != -1)
+						{
+							f_star_time_c_node = std::max(
+								f_start_time_of_node_before_A + nodeBeforeAPoint->processTime,
+								c_node->preByStage->f_startTime + c_node->preByStage->processTime);
+							if (c_node->f_startTime + c_node->processTime > f_start_time_of_pre_stage)
+							{
+								break;
+							}
+							nodeBeforeAPoint = c_node;
+							f_start_time_of_node_before_A = f_star_time_c_node;
+							c_node = nodeBeforeAPoint->sucByMachine;
+							++a_point_offset;
+						}
+					}
+					else
+					{
+						//Find position A to the left from the deleted position
+						--a_point_offset;
+						nodeBeforeAPoint = nodeBeforeAPoint->preByMachine;
+						while (nodeBeforeAPoint->jobId != -1)
+						{
+							if (nodeBeforeAPoint->f_startTime + nodeBeforeAPoint->processTime
+								<= f_start_time_of_pre_stage)
+							{
+								break;
+							}
+							nodeBeforeAPoint = nodeBeforeAPoint->preByMachine;
+							--a_point_offset;
+						}
+					}
+				}
+
+				int b_point_offset = INT16_MIN;
+				Node* nodeAfterBPoint = tails[mid];
+				int b_start_time_of_node_after_B = INT32_MIN;
+				if (current_stage_id == stage_count - 1)
+				{
+					if (deleteNode->sucByMachine == tails[mid])
+					{
+						b_point_offset = 0;
+					}
+				}
+				else
+				{
+					b_point_offset = 0;
+					nodeAfterBPoint = deleteNode->sucByMachine;
+					//b_start_time_of_node_after_B = INT32_MIN;
+					if (nodeAfterBPoint->b_startTime + nodeAfterBPoint->processTime
+						<= b_start_time_of_suc_stage)
+					{
+						//Find position B to the left from the deleted position
+						b_start_time_of_node_after_B = nodeAfterBPoint->b_startTime;
+						Node* c_node = nodeAfterBPoint->preByMachine;
+						int b_star_time_c_node;
+						while (c_node->jobId != -1)
+						{
+							b_star_time_c_node = std::max(
+								b_start_time_of_node_after_B + nodeAfterBPoint->processTime,
+								c_node->sucByStage->b_startTime + c_node->sucByStage->processTime);
+							if (c_node->b_startTime + c_node->processTime > b_start_time_of_suc_stage)
+							{
+								break;
+							}
+							nodeAfterBPoint = c_node;
+							b_start_time_of_node_after_B = b_star_time_c_node;
+							c_node = nodeAfterBPoint->preByMachine;
+							++b_point_offset;
+						}
+					}
+					else
+					{
+						//Find position B to the right from the deleted position
+						--b_point_offset;
+						nodeAfterBPoint = nodeAfterBPoint->sucByMachine;
+						while (nodeAfterBPoint->jobId != -1)
+						{
+							if (nodeAfterBPoint->b_startTime + nodeAfterBPoint->processTime
+								<= b_start_time_of_suc_stage)
+							{
+								break;
+							}
+							nodeAfterBPoint = nodeAfterBPoint->sucByMachine;
+							--b_point_offset;
+						}
+					}
+				}
+
+				if (a_point_offset >= 0 && b_point_offset >= 0)
+				{
+					//B is less than or equal to A. Delete positions in B and A.
+					continue;
+				}
+				else if (a_point_offset < 0 && b_point_offset < 0)
+				{
+					//A is greater than B. Position A is before the deletion position and position B is after the deletion position.
+					int longestValue;
+					Node* nodeBeforeInsertPos;
+					Node* nodeAfterInsertPos;
+
+					nodeBeforeInsertPos = deleteNode->sucByMachine;
+					nodeAfterInsertPos = nodeBeforeInsertPos->sucByMachine;
+					int f_start_time = nodeBeforeInsertPos->preByMachine->f_startTime;
+					while (nodeBeforeInsertPos != nodeAfterBPoint)
+					{
+						f_start_time =
+							std::max(f_start_time
+									 + nodeBeforeInsertPos->preByMachine->processTime,
+								nodeBeforeInsertPos->preByStage->f_startTime
+								+ nodeBeforeInsertPos->preByStage->processTime);
+						longestValue =
+							std::max(f_start_time_of_pre_stage,
+								f_start_time + nodeBeforeInsertPos->processTime)
+							+ deleteNode->processTime +
+							std::max(b_start_time_of_suc_stage,
+								nodeAfterInsertPos->b_startTime + nodeAfterInsertPos->processTime);
+						if (longestValue < bestPathLengthThroughDelNode)
+						{
+							bestPathLengthThroughDelNode = longestValue;
+							nodeBeforeBestInsertPos = nodeBeforeInsertPos;
+						}
+						nodeBeforeInsertPos = nodeAfterInsertPos;
+						nodeAfterInsertPos = nodeBeforeInsertPos->sucByMachine;
+					}
+
+					nodeAfterInsertPos = deleteNode->preByMachine;
+					nodeBeforeInsertPos = nodeAfterInsertPos->preByMachine;
+					int b_start_time = nodeAfterInsertPos->sucByMachine->b_startTime;
+					while (nodeAfterInsertPos != nodeBeforeAPoint)
+					{
+						b_start_time =
+							std::max(b_start_time
+									 + nodeAfterInsertPos->sucByMachine->processTime,
+								nodeAfterInsertPos->sucByStage->b_startTime
+								+ nodeAfterInsertPos->sucByStage->processTime);
+
+						longestValue =
+							std::max(f_start_time_of_pre_stage,
+								nodeBeforeInsertPos->f_startTime + nodeBeforeInsertPos->processTime)
+							+ deleteNode->processTime +
+							std::max(b_start_time_of_suc_stage,
+								b_start_time + nodeAfterInsertPos->processTime);
+						if (longestValue < bestPathLengthThroughDelNode)
+						{
+							bestPathLengthThroughDelNode = longestValue;
+							nodeBeforeBestInsertPos = nodeBeforeInsertPos;
+						}
+						nodeAfterInsertPos = nodeBeforeInsertPos;
+						nodeBeforeInsertPos = nodeAfterInsertPos->preByMachine;
+					}
+				}
+				else if (a_point_offset < 0) //a_point_offset < 0 && b_point_offset >= 0
+				{
+					//Position A before the deletion position and position B before the deletion position (point B may be the deletion position).
+					if (-a_point_offset > b_point_offset)
+					{
+						//A is greater than B.
+						int longestValue;
+						Node* nodeAfterInsertPos = nodeAfterBPoint;
+						Node* nodeBeforeInsertPos = nodeAfterInsertPos->preByMachine;
+						int b_start_time = b_start_time_of_node_after_B;
+						while (true)
+						{
+							longestValue =
+								std::max(f_start_time_of_pre_stage,
+									nodeBeforeInsertPos->f_startTime + nodeBeforeInsertPos->processTime)
+								+ deleteNode->processTime +
+								std::max(b_start_time_of_suc_stage,
+									b_start_time + nodeAfterInsertPos->processTime);
+							if (longestValue < bestPathLengthThroughDelNode)
+							{
+								bestPathLengthThroughDelNode = longestValue;
+								nodeBeforeBestInsertPos = nodeBeforeInsertPos;
+							}
+							if (nodeBeforeInsertPos == nodeBeforeAPoint)
+							{
+								break;
+							}
+							nodeAfterInsertPos = nodeBeforeInsertPos;
+							nodeBeforeInsertPos = nodeAfterInsertPos->preByMachine;
+							b_start_time =
+								std::max(b_start_time
+										 + nodeAfterInsertPos->sucByMachine->processTime,
+									nodeAfterInsertPos->sucByStage->b_startTime
+									+ nodeAfterInsertPos->sucByStage->processTime);
+						}
+					}
+					else
+					{
+						//B is less than or equal to A.
+						int longestValue = f_start_time_of_pre_stage + b_start_time_of_suc_stage
+										   + deleteNode->processTime;
+						if (longestValue < bestPathLengthThroughDelNode)
+						{
+							bestPathLengthThroughDelNode = longestValue;
+							nodeBeforeBestInsertPos = nodeBeforeAPoint;
+						}
+					}
+				}
+				else //a_point_offset >= 0 && b_point_offset < 0
+				{
+					//Position B is after the deletion position and position A is after the deletion position (point B may be the deletion position).
+					if (-b_point_offset > a_point_offset)
+					{
+						//A is greater than B.
+						int longestValue;
+						Node* nodeBeforeInsertPos = nodeBeforeAPoint;
+						Node* nodeAfterInsertPos = nodeBeforeInsertPos->sucByMachine;
+						int f_start_time = f_start_time_of_node_before_A;
+						while (true)
+						{
+							longestValue =
+								std::max(f_start_time_of_pre_stage,
+									f_start_time + nodeBeforeInsertPos->processTime)
+								+ deleteNode->processTime +
+								std::max(b_start_time_of_suc_stage,
+									nodeAfterInsertPos->b_startTime + nodeAfterInsertPos->processTime);
+							if (longestValue < bestPathLengthThroughDelNode)
+							{
+								bestPathLengthThroughDelNode = longestValue;
+								nodeBeforeBestInsertPos = nodeBeforeInsertPos;
+							}
+							if (nodeAfterInsertPos == nodeAfterBPoint)
+							{
+								break;
+							}
+							nodeBeforeInsertPos = nodeAfterInsertPos;
+							nodeAfterInsertPos = nodeBeforeInsertPos->sucByMachine;
+							f_start_time =
+								std::max(f_start_time
+										 + nodeBeforeInsertPos->preByMachine->processTime,
+									nodeBeforeInsertPos->preByStage->f_startTime
+									+ nodeBeforeInsertPos->preByStage->processTime);
+						}
+					}
+					else
+					{
+						//B is less than or equal to A.
+						int longestValue = f_start_time_of_pre_stage + b_start_time_of_suc_stage
+										   + deleteNode->processTime;
+						if (longestValue < bestPathLengthThroughDelNode)
+						{
+							bestPathLengthThroughDelNode = longestValue;
+							nodeBeforeBestInsertPos = nodeAfterBPoint->preByMachine;
+						}
+					}
+				}
+			}
+			else
+			{
+				//Try another machine.
+				int f_complete_time_machine = tails[mid]->f_startTime;
+				int b_complete_time_machine = heads[mid]->b_startTime;
+
+				if (f_complete_time_machine - f_start_time_of_pre_stage
+					>= b_complete_time_machine - b_start_time_of_suc_stage)
+				{
+					//Find position A and position B from left to right
+					bool is_find_A_pos = false;
+					int longestValue;
+					Node* nodeBeforeInsertPos = heads[mid];
+					Node* nodeAfterInsertPos = nodeBeforeInsertPos->sucByMachine;
+					while (nodeBeforeInsertPos != tails[mid])
+					{
+						if (!is_find_A_pos &&
+							nodeAfterInsertPos->f_startTime + nodeAfterInsertPos->processTime
+							> f_start_time_of_pre_stage)
+						{
+							//Position A was found.
+							is_find_A_pos = true;
+						}
+
+						if (nodeAfterInsertPos->b_startTime + nodeAfterInsertPos->processTime
+							<= b_start_time_of_suc_stage)
+						{
+							//Position B was found.
+							longestValue =
+								std::max(f_start_time_of_pre_stage,
+									nodeBeforeInsertPos->f_startTime + nodeBeforeInsertPos->processTime)
+								+ deleteNode->processTime
+								+ b_start_time_of_suc_stage;
+							if (longestValue < bestPathLengthThroughDelNode)
+							{
+								bestPathLengthThroughDelNode = longestValue;
+								nodeBeforeBestInsertPos = nodeBeforeInsertPos;
+							}
+							break;
+						}
+
+						if (is_find_A_pos)
+						{
+							longestValue =
+								std::max(f_start_time_of_pre_stage,
+									nodeBeforeInsertPos->f_startTime + nodeBeforeInsertPos->processTime)
+								+ deleteNode->processTime +
+								std::max(b_start_time_of_suc_stage,
+									nodeAfterInsertPos->b_startTime + nodeAfterInsertPos->processTime);
+							if (longestValue < bestPathLengthThroughDelNode)
+							{
+								bestPathLengthThroughDelNode = longestValue;
+								nodeBeforeBestInsertPos = nodeBeforeInsertPos;
+							}
+						}
+						nodeBeforeInsertPos = nodeAfterInsertPos;
+						nodeAfterInsertPos = nodeBeforeInsertPos->sucByMachine;
+					}
+				}
+				else
+				{
+					//Find position A and position B from right to left
+					bool is_find_B_pos = false;
+					int longestValue;
+					Node* nodeAfterInsertPos = tails[mid];
+					Node* nodeBeforeInsertPos = nodeAfterInsertPos->preByMachine;
+					while (nodeAfterInsertPos != heads[mid])
+					{
+						if (!is_find_B_pos &&
+							nodeBeforeInsertPos->b_startTime + nodeBeforeInsertPos->processTime
+							> b_start_time_of_suc_stage)
+						{
+							//Position B was found.
+							is_find_B_pos = true;
+						}
+
+						if (nodeBeforeInsertPos->f_startTime + nodeBeforeInsertPos->processTime
+							<= f_start_time_of_pre_stage)
+						{
+							//Position A was found.
+							longestValue =
+								f_start_time_of_pre_stage
+								+ deleteNode->processTime
+								+ std::max(b_start_time_of_suc_stage,
+									nodeAfterInsertPos->b_startTime + nodeAfterInsertPos->processTime);
+
+							if (longestValue < bestPathLengthThroughDelNode)
+							{
+								bestPathLengthThroughDelNode = longestValue;
+								nodeBeforeBestInsertPos = nodeBeforeInsertPos;
+							}
+							break;
+						}
+
+						if (is_find_B_pos)
+						{
+							longestValue =
+								std::max(f_start_time_of_pre_stage,
+									nodeBeforeInsertPos->f_startTime + nodeBeforeInsertPos->processTime)
+								+ deleteNode->processTime +
+								std::max(b_start_time_of_suc_stage,
+									nodeAfterInsertPos->b_startTime + nodeAfterInsertPos->processTime);
+							if (longestValue < bestPathLengthThroughDelNode)
+							{
+								bestPathLengthThroughDelNode = longestValue;
+								nodeBeforeBestInsertPos = nodeBeforeInsertPos;
+							}
+						}
+						nodeAfterInsertPos = nodeBeforeInsertPos;
+						nodeBeforeInsertPos = nodeAfterInsertPos->preByMachine;
+					}
+				}
+			}
+		}
+		if (bestPathLengthThroughDelNode < original_makeSpan)
+		{
+
+			insert_node_at_position(deleteNode, nodeBeforeBestInsertPos, deleteNode->preByStage);
+			int new_span = refresh_all_graph();
+			return new_span;
+		}
+		else
+		{
+			insert_node_at_position(deleteNode, originalPreNodeOnMachine, deleteNode->preByStage);
+		}
+	}
+	return original_makeSpan;
+}
+
+int Solution::decode_local_search_critical_nodes(int original_makeSpan)
+{
+	std::vector<Node*> critical_nodes;
+
+	while (true)
+	{
+		critical_nodes.clear();
+		find_all_critical_nodes_forward(critical_nodes, original_makeSpan);
+
+		int new_span = local_search_critical_nodes(critical_nodes, original_makeSpan);
+		if (new_span < original_makeSpan)
+		{
+			original_makeSpan = new_span;
+		}
+		else
+		{
+			break;
+		}
+	}
+	return original_makeSpan;
+}
+
+int Solution::local_search_critical_nodes(const std::vector<Node*>& critical_nodes, int original_makeSpan)
+{
+	for (auto deleteCriticalNode : critical_nodes)
+	{
+		Node* originalPreNodeOnMachine = deleteCriticalNode->preByMachine;
+		Node* preNodeAtStage = deleteCriticalNode->preByStage;
+		Node* sucNodeAtStage = deleteCriticalNode->sucByStage;
+
+		int stageId = deleteCriticalNode->stageId;
+		delete_node_physical_from_graph(deleteCriticalNode);
+		int makeSpanAfterDeleteNode = refresh_all_graph();
+
+		const auto& heads = f_head_on_machines_in_each_stage[stageId];
+		const auto& tails = b_head_on_machines_in_each_stage[stageId];
+		int machineCount = problem.getNumOfMachinesInStage(stageId);
+		int bestSpan = original_makeSpan;
+		Node* nodeBeforeBestInsertPos;
+		for (int mid = 0; mid < machineCount; ++mid)
+		{
+			Node* nodeBeforeInsertPos = heads[mid];
+			Node* nodeAfterInsertPos = nodeBeforeInsertPos->sucByMachine;
+
+			while (nodeBeforeInsertPos != tails[mid])
+			{
+				int longestValue =
+					std::max(preNodeAtStage->f_startTime + preNodeAtStage->processTime,
+						nodeBeforeInsertPos->f_startTime + nodeBeforeInsertPos->processTime)
+					+ deleteCriticalNode->processTime +
+					std::max(sucNodeAtStage->b_startTime + sucNodeAtStage->processTime,
+						nodeAfterInsertPos->b_startTime + nodeAfterInsertPos->processTime);
+				int makeSpanAfterInsert = std::max(longestValue, makeSpanAfterDeleteNode);
+				if (makeSpanAfterInsert < bestSpan)
+				{
+					bestSpan = makeSpanAfterInsert;
+					nodeBeforeBestInsertPos = nodeBeforeInsertPos;
+				}
+				nodeBeforeInsertPos = nodeAfterInsertPos;
+				nodeAfterInsertPos = nodeBeforeInsertPos->sucByMachine;
+			}
+		}
+		if (bestSpan < original_makeSpan)
+		{
+			insert_node_at_position(deleteCriticalNode, nodeBeforeBestInsertPos, preNodeAtStage);
+			//solution.setMakeSpan(bestSpan);
+			int new_span = refresh_all_graph();
+			//assert(a == bestSpan);
+			return new_span;
+		}
+		else
+		{
+			insert_node_at_position(deleteCriticalNode, originalPreNodeOnMachine, preNodeAtStage);
+		}
+	}
+	return original_makeSpan;
+}
+
+int Solution::decode_local_search_all_nodes_r(int original_makeSpan)
+{
+	std::vector<Node*> critical_nodes;
+
+	while (true)
+	{
+		int new_span = local_search_all_nodes_r(original_makeSpan);
+		if (new_span < original_makeSpan)
+		{
+			original_makeSpan = new_span;
+		}
+		else
+		{
+			break;
+		}
+	}
+	return original_makeSpan;
+}
+
+int Solution::local_search_all_nodes_r(int original_makeSpan)
+{
+	int num_of_jobs = problem.getNumOfJobs();
+	int num_of_stages = problem.getNumOfStages();
+
+	for (int s = 0; s < num_of_stages; ++s)
+	{
+		for (int jobId = 0; jobId < num_of_jobs; ++jobId)
+		{
+			Node* deleteNode = operations[s][jobId];
+			Node* originalPreNodeOnMachine = deleteNode->preByMachine;
+			Node* preNodeAtStage = deleteNode->preByStage;
+			Node* sucNodeAtStage = deleteNode->sucByStage;
+
+			int stageId = deleteNode->stageId;
+			delete_node_physical_from_graph(deleteNode);
+			int makeSpanAfterDeleteNode = refresh_all_graph();
+
+			const auto& heads = f_head_on_machines_in_each_stage[stageId];
+			const auto& tails = b_head_on_machines_in_each_stage[stageId];
+			int machineCount = problem.getNumOfMachinesInStage(stageId);
+			int bestSpan = original_makeSpan;
+			Node* nodeBeforeBestInsertPos;
+			for (int mid = 0; mid < machineCount; ++mid)
+			{
+				Node* nodeBeforeInsertPos = heads[mid];
+				Node* nodeAfterInsertPos = nodeBeforeInsertPos->sucByMachine;
+
+				while (nodeBeforeInsertPos != tails[mid])
+				{
+					int longestValue =
+						std::max(preNodeAtStage->f_startTime + preNodeAtStage->processTime,
+							nodeBeforeInsertPos->f_startTime + nodeBeforeInsertPos->processTime)
+						+ deleteNode->processTime +
+						std::max(sucNodeAtStage->b_startTime + sucNodeAtStage->processTime,
+							nodeAfterInsertPos->b_startTime + nodeAfterInsertPos->processTime);
+					int makeSpanAfterInsert = std::max(longestValue, makeSpanAfterDeleteNode);
+					if (makeSpanAfterInsert < bestSpan)
+					{
+						bestSpan = makeSpanAfterInsert;
+						nodeBeforeBestInsertPos = nodeBeforeInsertPos;
+					}
+					nodeBeforeInsertPos = nodeAfterInsertPos;
+					nodeAfterInsertPos = nodeBeforeInsertPos->sucByMachine;
+				}
+			}
+			if (bestSpan < original_makeSpan)
+			{
+				insert_node_at_position(deleteNode, nodeBeforeBestInsertPos, preNodeAtStage);
+				//solution.setMakeSpan(bestSpan);
+				int new_span = refresh_all_graph();
+				//assert(a == bestSpan);
+				return new_span;
+			}
+			else
+			{
+				insert_node_at_position(deleteNode, originalPreNodeOnMachine, preNodeAtStage);
+			}
+		}
+	}
+
+	return original_makeSpan;
+}
+
+int Solution::decode_local_search_all_nodes_nr(int original_makeSpan)
+{
+	std::vector<Node*> critical_nodes;
+
+	while (true)
+	{
+		int new_span = local_search_all_nodes_nr(original_makeSpan);
+		if (new_span < original_makeSpan)
+		{
+			original_makeSpan = new_span;
+		}
+		else
+		{
+			break;
+		}
+	}
+	return original_makeSpan;
+}
+
+int Solution::local_search_all_nodes_nr(int original_makeSpan)
+{
+	int num_of_jobs = problem.getNumOfJobs();
+	int num_of_stages = problem.getNumOfStages();
+
+	for (int s = 0; s < num_of_stages; ++s)
+	{
+		for (int jobId = 0; jobId < num_of_jobs; ++jobId)
+		{
+			Node* deleteNode = operations[s][jobId];
+			Node* originalPreNodeOnMachine = deleteNode->preByMachine;
+			Node* preNodeAtStage = deleteNode->preByStage;
+
+			int stageId = deleteNode->stageId;
+			delete_node_physical_from_graph(deleteNode);
+			//int makeSpanAfterDeleteNode = refresh_all_graph();
+
+			const auto& heads = f_head_on_machines_in_each_stage[stageId];
+			const auto& tails = b_head_on_machines_in_each_stage[stageId];
+			int machineCount = problem.getNumOfMachinesInStage(stageId);
+			int bestSpan = original_makeSpan;
+			Node* nodeBeforeBestInsertPos;
+			for (int mid = 0; mid < machineCount; ++mid)
+			{
+				Node* nodeBeforeInsertPos = heads[mid];
+				Node* nodeAfterInsertPos = nodeBeforeInsertPos->sucByMachine;
+
+				while (nodeBeforeInsertPos != tails[mid])
+				{
+					insert_node_at_position(deleteNode, nodeBeforeInsertPos, preNodeAtStage);
+					int makeSpanAfterInsert = refresh_forward_graph();
+					if (makeSpanAfterInsert < bestSpan)
+					{
+						bestSpan = makeSpanAfterInsert;
+						nodeBeforeBestInsertPos = nodeBeforeInsertPos;
+					}
+					delete_node_physical_from_graph(deleteNode);
+					nodeBeforeInsertPos = nodeAfterInsertPos;
+					nodeAfterInsertPos = nodeBeforeInsertPos->sucByMachine;
+				}
+			}
+			if (bestSpan < original_makeSpan)
+			{
+				insert_node_at_position(deleteNode, nodeBeforeBestInsertPos, preNodeAtStage);
+				//solution.setMakeSpan(bestSpan);
+				//int new_span = refresh_all_graph();
+				//assert(a == bestSpan);
+				return bestSpan;
+			}
+			else
+			{
+				insert_node_at_position(deleteNode, originalPreNodeOnMachine, preNodeAtStage);
+			}
+		}
+	}
+	return original_makeSpan;
+}
+
+std::pair<int, int> Solution::find_best_insert_position(int inserted_job_id)
+{
+	int min_span = INT_MAX;
+	int best_pos;
+	for (int pos = 0; pos <= jobSequence.size(); ++pos)
+	{
+		jobSequence.insert(jobSequence.begin() + pos, inserted_job_id);
+		int span = decode_forward();
+		if (span < min_span)
+		{
+			min_span = span;
+			best_pos = pos;
+		}
+		jobSequence.erase(jobSequence.begin() + pos);
+	}
+	//jobSequence.insert(jobSequence.begin() + best_pos, inserted_job_id);
+	return { min_span, best_pos };
+}
+
+std::pair<int, int> Solution::find_best_swap(int swapped_index)
+{
+	int min_span = INT_MAX;
+	int best_index;
+	for (int index = 0; index < jobSequence.size(); ++index)
+	{
+		if (index == swapped_index)
+		{
+			continue;
+		}
+		std::swap(jobSequence[index], jobSequence[swapped_index]);
+		int span = decode_forward();
+		if (span < min_span)
+		{
+			min_span = span;
+			best_index = index;
+		}
+		std::swap(jobSequence[index], jobSequence[swapped_index]);
+	}
+	return { min_span, best_index };
+}
+
+void Solution::destruction(std::vector<int>& erased_jobs, int d)
+{
+	int k = 0;
+	while (k < d)
+	{
+		int pos = wyt_rand(jobSequence.size());
+		erased_jobs.emplace_back(jobSequence[pos]);
+		jobSequence.erase(jobSequence.begin() + pos);
+		++k;
+	}
+}
+
+void Solution::write_to_file(const std::string& file_name) const
+{
+	std::ofstream o_file;
+	o_file.open(file_name);
+	int stageId = 0;
+	for (const auto& headOnMachines : f_head_on_machines_in_each_stage)
+	{
+		o_file << stageId << std::endl;
+		int machineId = 0;
 		for (const auto& head : headOnMachines)
 		{
-			Node* preNode = head;
+			o_file << machineId << std::endl;
 			Node* node = head->sucByMachine;
-			delete head;
-			while (node != nullptr)
+			while (node->jobId != -1)
 			{
-				preNode = node;
+				o_file << node->jobId << "\t";
 				node = node->sucByMachine;
-				delete preNode;
 			}
+			++machineId;
+			o_file << std::endl;
 		}
+		++stageId;
 	}
+	o_file.close();
 
-	std::for_each(std::begin(headJobs), std::end(headJobs), [](const Node* ptr)
-	{
-		delete ptr;
-	});
-	std::for_each(std::begin(tailJobs), std::end(tailJobs), [](const Node* ptr)
-	{
-		delete ptr;
-	});
 }
 
 

@@ -12,17 +12,18 @@ class Job
 {
     int id = -1;
     std::vector<int> processTime{};
+	int total_process_time = 0;
 public:
-    Job(int id, int operationCount);
+    Job(int id, int operationCount, bool is_init_process_time = true);
 	Job(int id, int operationCount, std::ifstream& fin);
 
     int getId() const;
 
     int getProcessTime(int operation) const;
-
+    void setProcessTime(int operation, int process_time);
+	int get_total_process_time() const;
     virtual ~Job() = default;
 };
-
 
 inline int Job::getId() const
 {
@@ -32,6 +33,18 @@ inline int Job::getId() const
 inline int Job::getProcessTime(int operation) const
 {
     return processTime[operation];
+}
+
+inline void Job::setProcessTime(int operation, int process_time)
+{
+	total_process_time -= processTime[operation];
+	processTime[operation] = process_time;
+	total_process_time += processTime[operation];
+}
+
+inline int Job::get_total_process_time() const
+{
+	return total_process_time;
 }
 
 

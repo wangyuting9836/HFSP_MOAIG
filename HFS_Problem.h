@@ -14,25 +14,28 @@ class HFS_Problem
 public:
     HFS_Problem(int jobCount, int stageCount);
 	explicit HFS_Problem(const std::string& fileName);
-
+	void writeToFile(const std::string& fileName) const;
+	void writeToGurobiFile(const std::string& fileName) const;
     virtual ~HFS_Problem() = default;
 
-    int getNumOfJobs() const;
+    [[nodiscard]] int getNumOfJobs() const;
 
-    int getNumOfStates() const;
+    [[nodiscard]] int getNumOfStages() const;
 
-	int getNumOfMachinesInStage(int stageId) const;
+	[[nodiscard]] int getNumOfMachinesInStage(int stageId) const;
 
-    const std::vector<Job> &getJobs() const;
+    [[nodiscard]] const std::vector<Job> &getJobs() const;
+	[[nodiscard]] int get_total_process_time() const;
 
 private:
     int numOfJobs{};
-    int numOfStates{};
+    int numOfStages{};
     std::vector<int> numOfMachinesInStage{};
     std::vector<Job> jobs{};
-
+	int total_process_time = 0;
     void init(int jobCount, int stageCount);
-	void readFile(const std::string& fileName);
+	void readFromFile(const std::string& fileName);
+
 };
 
 inline int HFS_Problem::getNumOfJobs() const
@@ -40,9 +43,14 @@ inline int HFS_Problem::getNumOfJobs() const
     return numOfJobs;
 }
 
-inline int HFS_Problem::getNumOfStates() const
+inline int HFS_Problem::getNumOfStages() const
 {
-    return numOfStates;
+    return numOfStages;
+}
+
+inline int HFS_Problem::get_total_process_time() const
+{
+	return total_process_time;
 }
 
 /*inline const std::vector<int> &HFS_Problem::getNumOfMachinesInStage() const
