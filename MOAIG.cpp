@@ -190,21 +190,11 @@ int MOAIG::Evolution(const HFS_Problem& problem)
 		}
 
 		solution_f.decode_forward_to_graph();
-		Solution tem_solution = solution_f;
 		int ls_span_f = solution_f.decode_local_search_mandatory_nodes(span_f);
 		if (ls_span_f < best_span_f)
 		{
 			best_span_f = ls_span_f;
 			best_solution_f = solution_f;
-
-			std::chrono::system_clock::time_point time_point_now = std::chrono::system_clock::now();
-			std::chrono::system_clock::duration duration_since_epoch
-				= time_point_now.time_since_epoch();
-			time_t since_epoch = duration_since_epoch.count();
-
-			best_solution_f.write_to_file(
-				std::string("../result/") + std::to_string(best_span_f) + std::string("_")+ std::to_string(since_epoch)
-				+ std::string(".txt"));
 		}
 
 		if (span_f <= original_span_f)
