@@ -629,7 +629,7 @@ void experimental_big_instance(double lambda, double jp, int d)
 {
 	int repeat_times = 5;
 
-	MOAIG::set_parameters(lambda, 0.4, jp, 4);
+	MOAIG::set_parameters(lambda, 0.4, jp, d);
 	IGWS::set_parameters(lambda, 0.4, 4);
 	CSA::set_parameters(lambda, 3.0, 3500, 0.99, 0.5);
 	TCSNSA::set_parameters(lambda, 3.0, 0.95, 3500, 10);
@@ -701,7 +701,6 @@ void experimental_big_instance(double lambda, double jp, int d)
 void experimental_Carlier_benchmark(double lambda, double jp, int d)
 {
 	int repeat_times = 5;
-	//std::vector<double> time_limit_point = { 0.001, 0.002, 0.003, 0.004, 0.005, 0.006, 0.007, 0.008, 0.009, 0.01 };
 
 	MOAIG::set_parameters(lambda, 0.4, jp, d);
 	IGWS::set_parameters(lambda, 0.4, 4);
